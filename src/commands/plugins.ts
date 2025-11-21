@@ -1,311 +1,187 @@
 import { Command } from "commander";
-import fs from "fs/promises";
-import path from "path";
-import { execa } from "execa";
-import chalk from "chalk";
-import { logger } from "@appneural/cli-shared";
-import { getPluginStatuses, reloadPlugins } from "../plugin/plugin-loader.js";
-import type { PluginCandidate, PluginStatus } from "../plugin/plugin-types.js";
-import { fileExists, loadRawPackage } from "../plugin/plugin-utils.js";
-import { getCustomPluginDirectory } from "../plugin/plugin-context.js";
-import { watchLocalPlugins } from "../plugin/plugin-watcher.js";
-import { getGlobalConfigDir } from "@appneural/cli-shared";
-import { registerPluginCreateCommand } from "../plugin/plugin-create.js";
+import { PluginLoader } from "../plugins/loader/plugin-loader.js";
+import { PluginRegistry } from "../plugins/registry/index.js";
+import { log } from "../plugins/utils/logger.js";
+import { handleList } from "../plugins/commands/list.js";
+import { handleSearch } from "../plugins/commands/search.js";
+import { handleInfo } from "../plugins/commands/info.js";
+import { handleDoctor } from "../plugins/commands/doctor.js";
+import { handleInstall } from "../plugins/commands/install.js";
+import { handleUninstall } from "../plugins/commands/uninstall.js";
+import { handleUpdate } from "../plugins/commands/update.js";
+import { handleEnable } from "../plugins/commands/enable.js";
+import { handleDisable } from "../plugins/commands/disable.js";
+import { handleCreate } from "../plugins/commands/create.js";
+import { handleLink } from "../plugins/commands/link.js";
+import { handleUnlink } from "../plugins/commands/unlink.js";
+import { handleBuild } from "../plugins/commands/build.js";
+import { handleDev } from "../plugins/commands/dev.js";
+import { handleTest } from "../plugins/commands/test.js";
+import { handleValidate } from "../plugins/commands/validate.js";
+import { handlePack } from "../plugins/commands/pack.js";
+import { handlePublish } from "../plugins/commands/publish.js";
+import { handleGenerate } from "../plugins/commands/generate.js";
+import { handleCategories, handleCategoryInfo, handleCategoryList, handleCategoryPlugins } from "../plugins/commands/categories.js";
+import { handleListType } from "../plugins/commands/trending.js";
+import { handleSandbox } from "../plugins/commands/sandbox.js";
+import { handlePermissions } from "../plugins/commands/permissions.js";
+import { handleAudit } from "../plugins/commands/audit.js";
+import { handleVerify } from "../plugins/commands/verify.js";
+import { handleCacheClear, handleCacheList } from "../plugins/commands/cache.js";
+import { handleReload } from "../plugins/commands/reload.js";
+import { handleHooksInspect, handleHooksList } from "../plugins/commands/hooks.js";
+import { handleCapabilities, handleCapabilitiesAll } from "../plugins/commands/capabilities.js";
+import { handleAddToWorkspace, handleRemoveFromWorkspace, handleSync } from "../plugins/commands/workspace.js";
+import { handleRun } from "../plugins/commands/run.js";
+import { handleExec } from "../plugins/commands/exec.js";
+import { handleDebug } from "../plugins/commands/debug.js";
+import { handleMigrate, handleMigrateList, handleMigrateRun } from "../plugins/commands/migrate.js";
+import { handleTemplates, handleTemplatesInstall, handleTemplatesList } from "../plugins/commands/templates.js";
+import { handleMarketplace, handleMarketplaceSearch } from "../plugins/commands/marketplace.js";
 
-const PLUGIN_CONFIG_FILE = "appneural.plugins.json";
-const GLOBAL_PLUGIN_CONFIG_DIR = getGlobalConfigDir();
-const GLOBAL_PLUGIN_CONFIG_PATH = path.join(GLOBAL_PLUGIN_CONFIG_DIR, PLUGIN_CONFIG_FILE);
+type AsyncAction = (...args: any[]) => Promise<void> | void;
 
-interface PluginConfig {
-  plugins: string[];
-}
-
-function configPath(): string {
-  return GLOBAL_PLUGIN_CONFIG_PATH;
-}
-
-async function ensurePluginConfigDirectory(): Promise<void> {
-  await fs.mkdir(GLOBAL_PLUGIN_CONFIG_DIR, { recursive: true });
-}
-
-async function readPluginConfig(): Promise<PluginConfig> {
+const wrap = (fn: AsyncAction) => async (...args: any[]) => {
   try {
-    const content = await fs.readFile(configPath(), "utf-8");
-    const parsed = JSON.parse(content) as PluginConfig;
-    if (!Array.isArray(parsed.plugins)) {
-      return { plugins: [] };
-    }
-    return parsed;
-  } catch {
-    return { plugins: [] };
+    await fn(...args);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.error(message);
+    process.exitCode = 1;
   }
-}
+};
 
-async function writePluginConfig(config: PluginConfig): Promise<void> {
-  await ensurePluginConfigDirectory();
-  await fs.writeFile(configPath(), JSON.stringify(config, null, 2), "utf-8");
-}
+export async function registerPluginCLI(program: Command) {
+  const registry = new PluginRegistry();
+  await registry.load();
+  const loader = new PluginLoader({ cli: program });
 
-async function ensureCustomPluginDirectory(): Promise<string> {
-  const directory = getCustomPluginDirectory();
-  await fs.mkdir(directory, { recursive: true });
-  return directory;
-}
+  const plugins = program.command("plugins").description("Manage anx plugins");
 
-async function ensurePluginListed(pkg: string): Promise<void> {
-  const config = await readPluginConfig();
-  if (!config.plugins.includes(pkg)) {
-    config.plugins.push(pkg);
-    await writePluginConfig(config);
-  }
-}
+  plugins.command("list").option("--enabled", "Only show enabled").action(wrap((options) => handleList(registry, options)));
 
-async function removePluginFromConfig(pkg: string): Promise<void> {
-  const config = await readPluginConfig();
-  const next = config.plugins.filter((name) => name !== pkg);
-  if (next.length !== config.plugins.length) {
-    config.plugins = next;
-    await writePluginConfig(config);
-  }
-}
+  plugins.command("search <keyword>").description("Search plugins").action(wrap((keyword) => handleSearch(keyword)));
 
-async function installPackageGlobally(pkg: string): Promise<void> {
-  logger.info(`Installing ${pkg} globally via npm`);
-  await execa("npm", ["install", "--global", pkg], { stdio: "inherit", cwd: process.cwd() });
-}
+  plugins.command("info <pluginName>").description("Show plugin info").action(wrap((pluginName) => handleInfo(registry, pluginName)));
 
-async function uninstallPackageGlobally(pkg: string): Promise<void> {
-  logger.info(`Uninstalling ${pkg} globally via npm`);
-  await execa("npm", ["uninstall", "--global", pkg], { stdio: "inherit", cwd: process.cwd() });
-}
+  plugins.command("doctor").description("Run diagnostics").action(wrap(() => handleDoctor(registry)));
 
-async function readPluginCommands(plugin: PluginCandidate): Promise<string[]> {
-  try {
-    const manifest = await loadRawPackage(plugin.packageRoot);
-    const commands = (manifest as any)?.appneural?.commands;
-    if (Array.isArray(commands)) {
-      return commands.map((cmd) => String(cmd));
-    }
-    return [];
-  } catch {
-    return [];
-  }
-}
+  plugins
+    .command("install <pluginName>")
+    .description("Install a plugin")
+    .option("--workspace", "Install to workspace")
+    .action(wrap((pluginName, options) => handleInstall(registry, pluginName, options)));
 
-async function statInstallTime(plugin: PluginCandidate): Promise<string | null> {
-  try {
-    const stats = await fs.stat(plugin.packageRoot);
-    return stats.mtime.toISOString();
-  } catch {
-    return null;
-  }
-}
+  plugins
+    .command("uninstall <pluginName>")
+    .description("Uninstall a plugin")
+    .option("--workspace", "Uninstall from workspace")
+    .action(wrap((pluginName, options) => handleUninstall(registry, pluginName, options)));
 
-export function registerPluginsCommands(program: Command): void {
-  const root = program.command("plugins").alias("plugin").description("APPNEURAL plugin operations");
+  plugins
+    .command("update [pluginName]")
+    .description("Update plugin or all plugins")
+    .option("--all", "Update all plugins")
+    .action(wrap((pluginName, options) => handleUpdate(registry, pluginName, options)));
 
-  root
-    .command("list")
-    .description("List discovered plugins")
-    .action(() => {
-      const statuses = getPluginStatuses();
-      if (statuses.length === 0) {
-        logger.warn("No APPNEURAL plugins detected. Try 'anx plugins reload'.");
-        return;
-      }
-      statuses.forEach((status) => {
-        const state = status.loaded ? "loaded" : `failed${status.error ? ` (${status.error})` : ""}`;
-        logger.info(
-          `${status.candidate.name} v${status.candidate.version ?? "0.0.0"} (${status.candidate.pluginType}) – ${state}`
-        );
-      });
-    });
+  plugins.command("enable <pluginName>").description("Enable a plugin").action(wrap((pluginName) => handleEnable(registry, pluginName)));
+  plugins.command("disable <pluginName>").description("Disable a plugin").action(wrap((pluginName) => handleDisable(registry, pluginName)));
 
-  root
-    .command("info <name>")
-    .description("Show plugin metadata")
-    .action(async (name: string) => {
-      const status = getPluginStatuses().find((entry) => entry.candidate.name === name);
-      if (!status) {
-        logger.warn(`Plugin '${name}' not found`);
-        return;
-      }
+  plugins
+    .command("create <pluginName>")
+    .description("Create a plugin scaffold")
+    .option("-d, --dir <dir>")
+    .action(wrap(handleCreate));
 
-      const installTimestamp = status.installedAt ?? (await statInstallTime(status.candidate)) ?? "unknown";
-      logger.info(`Name: ${status.candidate.name}`);
-      logger.info(`Version: ${status.candidate.version ?? "unknown"}`);
-      logger.info(`Type: ${status.candidate.pluginType}`);
-      logger.info(`Path: ${status.candidate.packageRoot}`);
-      logger.info(`Loaded: ${status.loaded ? "yes" : "no"}`);
-      if (status.error) {
-        logger.warn(`Last error: ${status.error}`);
-      }
-      logger.info(`Install time: ${installTimestamp}`);
-      const commands = await readPluginCommands(status.candidate);
-      if (commands.length > 0) {
-        logger.info(`Commands: ${commands.join(", ")}`);
-      } else {
-        logger.info("Commands: none reported");
-      }
-    });
+  plugins.command("link <path>").description("Link a local plugin").action(wrap((pluginPath) => handleLink(registry, pluginPath)));
 
-  root
-    .command("reload")
-    .description("Reload the plugin system")
-    .action(async () => {
-      await reloadPlugins(program);
-      logger.success("APPNEURAL plugins reloaded");
-    });
+  plugins.command("unlink <pluginName>").description("Unlink a local plugin").action(wrap((pluginName) => handleUnlink(registry, pluginName)));
 
-  root
-    .command("watch")
-    .description("Watch local workspace plugins and hot-reload on change")
-    .action(async () => {
-      logger.info("Starting local plugin watcher...");
-      await watchLocalPlugins(program);
-      logger.info("Plugin watcher stopped");
-    });
-
-  root
-    .command("doctor")
-    .description("Validate plugin health")
-    .action(async () => {
-      const statuses = getPluginStatuses();
-      if (statuses.length === 0) {
-        logger.warn("No plugins to diagnose");
-        return;
-      }
-      let issues = 0;
-
-      const nameCounts = new Map<string, number>();
-      statuses.forEach((status) => nameCounts.set(status.candidate.name, (nameCounts.get(status.candidate.name) ?? 0) + 1));
-      nameCounts.forEach((count, name) => {
-        if (count > 1) {
-          issues += 1;
-          logger.warn(`Duplicate plugin detected: ${name} (count: ${count})`);
-        }
-      });
-
-      for (const status of statuses) {
-        if (!(await fileExists(status.candidate.entryFile))) {
-          issues += 1;
-          logger.warn(`Missing entry file for ${status.candidate.name}: ${status.candidate.entryFile}`);
-        }
-        if (!status.loaded) {
-          issues += 1;
-          logger.warn(`Plugin not loaded: ${status.candidate.name} -> ${status.error ?? "unknown error"}`);
-        }
-        try {
-          await execa("node", ["--check", status.candidate.entryFile]);
-        } catch (error) {
-          issues += 1;
-          logger.warn(
-            `Syntax check failed for ${status.candidate.name}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
-      }
-
-      if (issues === 0) {
-        logger.success("Plugin doctor completed with no issues");
-      } else {
-        logger.warn(`Plugin doctor detected ${issues} issue(s)`);
-      }
-    });
-
-  root
-    .command("add <package>")
-    .description("Install an npm plugin and reload")
-    .action(async (pkg: string) => {
-      const customDirectory = await ensureCustomPluginDirectory();
-      logger.info(`Installing ${pkg} via npm into ${customDirectory}`);
-      await execa("npm", ["install", pkg, "--prefix", customDirectory], { stdio: "inherit", cwd: process.cwd() });
-      await installPackageGlobally(pkg);
-      await ensurePluginListed(pkg);
-      await reloadPlugins(program, { logPluginLifecycle: true });
-      logPluginInfo(pkg);
-      logger.success(`Plugin ${pkg} installed and plugins reloaded`);
-    });
-
-  root
-    .command("remove <package>")
-    .description("Uninstall an npm plugin")
-    .action(async (pkg: string) => {
-      const customDirectory = getCustomPluginDirectory();
-      if (!(await fileExists(customDirectory))) {
-        logger.warn(`No custom plugin directory found at ${customDirectory}. Nothing to uninstall.`);
-        return;
-      }
-      logger.info(`Uninstalling ${pkg} from ${customDirectory}`);
-      await execa("npm", ["uninstall", pkg, "--prefix", customDirectory], { stdio: "inherit", cwd: process.cwd() });
-      await uninstallPackageGlobally(pkg);
-      await removePluginFromConfig(pkg);
-      await reloadPlugins(program);
-      logger.success(`Plugin ${pkg} removed and plugins reloaded`);
-    });
-
-  root
-    .command("push <pluginName>")
-    .description("Push the local plugin repo to GitHub (APPNEURAL-Packages org)")
-    .action(async (pluginName: string) => {
-      const DIR_NAME = `appneural-${pluginName}`;
-      const pluginPath = path.resolve(DIR_NAME);
-      const repoName = `APPNEURAL-Packages/${DIR_NAME}`;
-      const DESCRIPTION = `${pluginName} plugin for APPNEURAL CLI`;
-      try {
-        // Check if repo already exists
-        const viewResult = await execa("gh", ["repo", "view", repoName], { cwd: pluginPath });
-        if (viewResult.exitCode === 0) {
-          logger.warn(`⏭️  Skipping push: ${pluginName} (repo already exists)`);
-          return;
-        }
-      } catch {
-        // Repo does not exist, proceed to create and push
-        logger.info(`🌐 Creating GitHub repo: ${repoName}`);
-        await execa("gh", ["repo", "create", repoName, "--private", "--source=.", "--remote=origin", "--description", DESCRIPTION, "--push"], { cwd: pluginPath, stdio: "inherit" });
-        logger.success(`Plugin ${pluginName} pushed to GitHub!`);
-      }
-    });
-
-  root
+  plugins.command("build <pluginName>").description("Build a plugin").action(wrap((pluginName) => handleBuild(registry, pluginName)));
+  plugins.command("dev <pluginName>").description("Run plugin dev mode").action(wrap((pluginName) => handleDev(registry, pluginName)));
+  plugins.command("test <pluginName>").description("Run plugin tests").action(wrap((pluginName) => handleTest(registry, pluginName)));
+  plugins.command("validate <pluginName>").description("Validate plugin manifest").action(wrap((pluginName) => handleValidate(registry, pluginName)));
+  plugins.command("pack <pluginName>").description("Pack a plugin").action(wrap((pluginName) => handlePack(registry, pluginName)));
+  plugins
     .command("publish <pluginName>")
-    .description("Publish the plugin to npm (public)")
-    .action(async (pluginName: string) => {
-      const DIR_NAME = `appneural-${pluginName}`;
-      const pluginPath = path.resolve(DIR_NAME);
-      try {
-        await execa("npm", ["version", "patch"], { cwd: pluginPath, stdio: "inherit" });
-        await execa("npm", ["publish", "--access", "public"], { cwd: pluginPath, stdio: "inherit" });
-        logger.success(`Plugin ${pluginName} published to npm!`);
-      } catch (err) {
-        logger.error(`Failed to publish plugin: ${err}`);
-      }
-    });
+    .description("Publish a plugin")
+    .option("--beta", "Publish with beta tag")
+    .option("--canary", "Publish with canary tag")
+    .action(wrap((pluginName, options) => handlePublish(registry, pluginName, options)));
 
-  // Register plugin create command under the plugin root group
-  if (typeof registerPluginCreateCommand === "function") {
-    registerPluginCreateCommand(root);
-  }
-}
+  const generate = plugins.command("generate").description("Generate plugin components");
+  ["tool", "command", "app", "template", "engine", "sdk", "agent"].forEach((type) => {
+    generate
+      .command(`${type} <name>`)
+      .option("-p, --plugin <pluginName>", "Target plugin")
+      .description(`Generate a ${type}`)
+      .action(wrap((name, options) => handleGenerate(type as any, name, options)));
+  });
 
-function logPluginInfo(pkg: string): void {
-  const status = getPluginStatuses().find((entry) => entry.candidate.name === pkg);
-  if (!status) {
-    return;
-  }
-  if (status.loaded) {
-    // const durationSegment =
-    //   typeof status.durationMs === "number" ? ` in ${status.durationMs}ms` : "";
-    // logger.info(
-    //   `${chalk.green("✔")} Loaded plugin: ${status.candidate.name} (${status.candidate.pluginType})${durationSegment}`
-    // );
-    // logger.info(
-    //   `${chalk.cyan("ℹ")} Source: ${status.candidate.source} | Path: ${status.candidate.packageRoot}`
-    // );
-  } else {
-    logger.warn(
-      `${chalk.yellow("⚠")} Plugin ${status.candidate.name} failed to load: ${status.error ?? "unknown error"}`
-    );
+  plugins.command("categories").description("List plugin categories").action(wrap(handleCategories));
+  const category = plugins.command("category").description("Category operations");
+  category.command("list").action(wrap(handleCategoryList));
+  category.command("info <category>").action(wrap((category) => handleCategoryInfo(category)));
+  category.command("plugins <category>").action(wrap((category) => handleCategoryPlugins(category)));
+
+  ["trending", "recommended", "featured", "new", "outdated"].forEach((name) => {
+    plugins.command(name).description(`${name} plugins`).action(wrap(() => handleListType(registry, name as any)));
+  });
+
+  plugins.command("sandbox <pluginName>").description("Inspect plugin sandbox").action(wrap((pluginName) => handleSandbox(registry, pluginName)));
+  plugins.command("permissions <pluginName>").description("Show plugin permissions").action(wrap((pluginName) => handlePermissions(registry, pluginName)));
+  plugins.command("audit <pluginName>").description("Audit plugin").action(wrap((pluginName) => handleAudit(registry, pluginName)));
+  plugins.command("verify <pluginName>").description("Verify plugin signature").action(wrap((pluginName) => handleVerify(registry, pluginName)));
+
+  const cache = plugins.command("cache").description("Manage plugin cache");
+  cache.command("clear").action(wrap(handleCacheClear));
+  cache.command("list").action(wrap(handleCacheList));
+
+  plugins.command("reload").description("Reload plugin registry").action(wrap(() => handleReload(loader)));
+
+  const hooks = plugins.command("hooks").description("Hook inspection");
+  hooks.command("list").action(wrap(() => handleHooksList(registry)));
+  hooks.command("inspect <pluginName>").action(wrap((pluginName) => handleHooksInspect(registry, pluginName)));
+
+  const capabilities = plugins.command("capabilities").description("Plugin capabilities");
+  capabilities.command("<pluginName>").description("Show plugin capabilities").action(wrap((pluginName) => handleCapabilities(registry, pluginName)));
+  capabilities.command("all").description("Show all plugin capabilities").action(wrap(() => handleCapabilitiesAll(registry)));
+
+  plugins.command("add-to-workspace <pluginName>").action(wrap((pluginName) => handleAddToWorkspace(registry, pluginName)));
+  plugins.command("remove-from-workspace <pluginName>").action(wrap((pluginName) => handleRemoveFromWorkspace(registry, pluginName)));
+  plugins.command("sync").description("Sync registry").action(wrap(() => handleSync(registry)));
+
+  plugins
+    .command("run <pluginName> <command>")
+    .allowUnknownOption(true)
+    .description("Run plugin command")
+    .action(wrap((pluginName, commandName, args) => handleRun(registry, pluginName, commandName, args)));
+
+  plugins.command("exec <pluginName> [args...]").description("Execute plugin entry").action(wrap((pluginName, args) => handleExec(registry, pluginName, args)));
+
+  ["debug", "log", "trace"].forEach((type) => {
+    plugins.command(`${type} <pluginName>`).description(`${type} plugin`).action(wrap((pluginName) => handleDebug(registry, pluginName, type as any)));
+  });
+
+  const migrate = plugins.command("migrate").description("Plugin migrations");
+  migrate.command("list").action(wrap(handleMigrateList));
+  migrate.command("run <file>").action(wrap((file) => handleMigrateRun(file)));
+  migrate.command("<pluginName>").action(wrap((pluginName) => handleMigrate(pluginName)));
+
+  const templates = plugins.command("templates").description("Plugin templates").action(wrap(() => handleTemplates(registry)));
+  templates.command("list").action(wrap(() => handleTemplatesList(registry)));
+  templates.command("install <templateName>").action(wrap((templateName) => handleTemplatesInstall(templateName)));
+  templates.command("show").description("Show templates per plugin").action(wrap(() => handleTemplates(registry)));
+
+  const marketplace = plugins.command("marketplace").description("Plugin marketplace");
+  marketplace.action(wrap(handleMarketplace));
+  marketplace.command("search <keyword>").description("Search marketplace").action(wrap((keyword) => handleMarketplaceSearch(keyword)));
+
+  // Load installed plugins to auto-register their commands
+  try {
+    await loader.loadAll();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`Failed to auto-register installed plugins: ${message}`);
   }
 }

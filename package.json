@@ -5,13 +5,20 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "peerDependencies": {
+    "@appneural/cli": "*",
     "@appneural/cli-core": "*",
     "@appneural/cli-shared": "*"
   },
   "dependencies": {
     "chalk": "^5.3.0",
     "commander": "^12.0.0",
-    "execa": "^9.6.0"
+    "execa": "^9.6.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^2.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.6.3"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"

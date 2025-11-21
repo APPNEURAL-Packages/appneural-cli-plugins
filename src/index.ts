@@ -1,6 +1,2 @@
-import { Command } from "commander";
-import { registerPluginsCommands } from "./commands/plugins.js";
-
-export default function register(program: Command): void {
-  registerPluginsCommands(program);
-}
+export * from "./plugins/index.js";
+export { registerPluginCLI } from "./commands/plugins.js";
