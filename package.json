@@ -21,7 +21,7 @@
     "typescript": "^5.6.3"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc --build tsconfig.json --force",
     "prepublishOnly": "npm run build"
   },
   "files": [

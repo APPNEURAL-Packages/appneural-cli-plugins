@@ -5,7 +5,7 @@ import { PluginManifest } from "../utils/types.js";
 import { pluginManifestSchema } from "./schema.js";
 
 const Ajv = (AjvImport as any).default ?? AjvImport;
-const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
+const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
 (addFormats as any)(ajv);
 const validate = ajv.compile(pluginManifestSchema as any);
 

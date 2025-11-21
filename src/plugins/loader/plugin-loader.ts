@@ -49,6 +49,21 @@ interface LoadedPluginRecord {
 const CACHE_FILE = path.join(PLUGIN_CACHE_ROOT, "plugins.json");
 const DEFAULT_CACHE_TTL = 30_000;
 
+function isPluginPackage(name: string, pkgJson: Record<string, unknown> | undefined): boolean {
+  if (!name) return false;
+  if (name.startsWith("appneural-plugin-")) return true;
+  if (name.startsWith("@appneural/plugin-")) return true;
+
+  const meta = (pkgJson as any)?.appneural ?? (pkgJson as any)?.appneuralPlugin ?? (pkgJson as any)?.["appneural-plugin"];
+  if (meta && typeof meta === "object") {
+    const type = (meta as any).type;
+    if (type === "plugin") return true;
+    if ((meta as any).manifest || (meta as any).commands) return true;
+  }
+
+  return false;
+}
+
 export class PluginLoader {
   private options: PluginLoaderOptions;
   private cache: CachedPluginEntry[] = [];
@@ -148,27 +163,32 @@ export class PluginLoader {
   }
 
   private async tryReadManifest(location: string, scope: PluginScope): Promise<CachedPluginEntry | null> {
-    for (const candidate of resolveManifestCandidates(location)) {
-      if (await pathExists(candidate)) {
-        const pkgPath = path.join(location, "package.json");
-        const pkgMtime = await this.tryGetMTime(pkgPath);
-        let version: string | undefined;
-        try {
-          const pkgRaw = await fs.promises.readFile(pkgPath, "utf8");
-          const pkg = JSON.parse(pkgRaw);
-          version = pkg.version;
-        } catch {
-          // ignore
-        }
-        return {
-          name: path.basename(location),
-          scope,
-          location,
-          version,
-          mtime: pkgMtime,
-        };
-      }
+    const pkgPath = path.join(location, "package.json");
+    let pkgJson: Record<string, unknown> | undefined;
+    try {
+      const pkgRaw = await fs.promises.readFile(pkgPath, "utf8");
+      pkgJson = JSON.parse(pkgRaw) as Record<string, unknown>;
+    } catch {
+      return null;
     }
+
+    if (!isPluginPackage(path.basename(location), pkgJson)) {
+      return null;
+    }
+
+    for (const candidate of resolveManifestCandidates(location)) {
+      if (!(await pathExists(candidate))) continue;
+      const pkgMtime = await this.tryGetMTime(pkgPath);
+      const version = typeof (pkgJson as any).version === "string" ? ((pkgJson as any).version as string) : undefined;
+      return {
+        name: path.basename(location),
+        scope,
+        location,
+        version,
+        mtime: pkgMtime,
+      };
+    }
+
     return null;
   }
 
